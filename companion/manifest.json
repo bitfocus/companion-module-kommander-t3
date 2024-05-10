@@ -1,26 +1,26 @@
 {
-	"id": "your-module-name",
-	"name": "your-module-name",
-	"shortname": "module-shortname",
-	"description": "A short one line description of your module",
-	"version": "0.0.0",
+	"id": "kommander-module", 
+	"name": "Kommander Media Server",
+	"shortname": "Kommander",
+	"description": "This module will allow you to control Kommander Media Server",
+	"version": "1.0.0",
 	"license": "MIT",
-	"repository": "git+https://github.com/bitfocus/companion-module-your-module-name.git",
-	"bugs": "https://github.com/bitfocus/companion-module-your-module-name/issues",
+	"repository": "git+https://gitee.com/xuweijun_admin/kommander-bitfocus-companion",
+	"bugs": "https://gitee.com/xuweijun_admin/kommander-bitfocus-companion/issues",
 	"maintainers": [
 		{
-			"name": "Your name",
-			"email": "Your email"
+			"name": "kommander",
+			"email": "kommander@kystar.net"
 		}
 	],
 	"runtime": {
 		"type": "node18",
 		"api": "nodejs-ipc",
 		"apiVersion": "0.0.0",
-		"entrypoint": "../dist/main.js"
+		"entrypoint": "../main.js"
 	},
 	"legacyIds": [],
-	"manufacturer": "Your company",
-	"products": ["Your product"],
-	"keywords": []
+	"manufacturer": "BowTek",
+	"products": ["Kommander T0/T1/T3", "F1/F1Pro/F2/F9", "PS-Series"],
+	"keywords": ["Kommander T0/T1/T3"]
 }
