@@ -1,12 +1,12 @@
 {
-	"id": "kommander-module", 
+	"id": "kommander-t3", 
 	"name": "Kommander Media Server",
 	"shortname": "Kommander",
 	"description": "This module will allow you to control Kommander Media Server",
-	"version": "1.0.0",
+	"version": "0.0.0",
 	"license": "MIT",
-	"repository": "git+https://gitee.com/xuweijun_admin/kommander-bitfocus-companion",
-	"bugs": "https://gitee.com/xuweijun_admin/kommander-bitfocus-companion/issues",
+	"repository": "git+https://github.com/bitfocus/companion-module-kommander-t3",
+	"bugs": "https://github.com/bitfocus/companion-module-kommander-t3/issues",
 	"maintainers": [
 		{
 			"name": "kommander",

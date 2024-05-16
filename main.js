@@ -4,7 +4,7 @@ import objectPath from 'object-path'
 import { upgradeScripts } from './upgrade.js'
 
 
-class WebsocketInstance extends InstanceBase {
+class KommanderInstance extends InstanceBase {
 	isInitialized = false
 
 	subscriptions = new Map()
@@ -17,10 +17,10 @@ class WebsocketInstance extends InstanceBase {
 		this.isInitialized = true
 		// login 
 		
-		this.updateVariables()
+		//this.updateVariables()
 		this.initActions()
-		this.initFeedbacks()
-		this.subscribeFeedbacks()
+		//this.initFeedbacks()
+		//this.subscribeFeedbacks()
 	}
 
 	async destroy() {
@@ -84,7 +84,7 @@ class WebsocketInstance extends InstanceBase {
 
 		const url = this.config.url
 		if (!url || url.match(new RegExp(this.wsRegex)) === null) {
-			this.updateStatus(InstanceStatus.BadConfig, `WS URL is not defined or invalid`)
+			this.updateStatus(InstanceStatus.BadConfig, `Invalid URL provided. Please make sure the URL is valid and matches the required format`)
 			return
 		}
 
@@ -161,14 +161,6 @@ class WebsocketInstance extends InstanceBase {
 
 	getConfigFields() {
 		return [
-			{
-				type: 'static-text',
-				id: 'info',
-				width: 12,
-				label: 'Information',
-				value:
-					"<strong>PLEASE READ THIS!</strong> Generic modules is only for use with custom applications. If you use this module to control a device or software on the market that more than you are using, <strong>PLEASE let us know</strong> about this software, so we can make a proper module for it. If we already support this and you use this to trigger a feature our module doesn't support, please let us know. We want companion to be as easy as possible to use for anyone.",
-			},
 			{
 				type: 'textinput',
 				id: 'url',
@@ -255,12 +247,12 @@ class WebsocketInstance extends InstanceBase {
 
 	initActions() {
 		const callPlanDropDownValue = [
-			{ id: 'PreviewPlan', label: 'PreviewPlan' },
-			{ id: 'NextPlan', label: 'NextPlan' },
+			{ id: 'PreviousPlan', label: 'Previous Plan' },
+			{ id: 'NextPlan', label: 'Next Plan' },
 		];
 
     const changePlanGroupDropDownValue = [
-			{ id: 'pre', label: 'Preview Group' },
+			{ id: 'pre', label: 'Previous Group' },
 			{ id: 'next', label: 'Next Group' },
 		];
 
@@ -282,15 +274,14 @@ class WebsocketInstance extends InstanceBase {
 					{
 						id: 'callPlan',
 						type: 'dropdown',
-						label: 'PreviewPlan',
+						label: 'Previous Plan',
 						choices: callPlanDropDownValue,
-						default: 'PreviewPlan',
+						default: 'PreviousPlan',
 					},
 				],
 				callback: async (action, context) => {
-					this.log('debug', `Message sent`)
-					const value = await context.parseVariablesInString(action.options.data)
 					if (this.config.debug_messages) {
+            const value = await context.parseVariablesInString(action.options.data)
 						this.log('debug', `Message sent: ${value}`)
 					}
           if (typeof(action.options.callPlan) === 'number') {
@@ -323,9 +314,8 @@ class WebsocketInstance extends InstanceBase {
 					},
 				],
 				callback: async (action, context) => {
-					this.log('debug', `Message sent`)
-					const value = await context.parseVariablesInString(action.options.data)
 					if (this.config.debug_messages) {
+            const value = await context.parseVariablesInString(action.options.data)
 						this.log('debug', `Message sent: ${value}`)
 					}
           if (typeof(action.options.changePlanGroup) === 'number') {
@@ -361,9 +351,8 @@ class WebsocketInstance extends InstanceBase {
 					},
 				],
 				callback: async (action, context) => {
-					this.log('debug', `Message sent`)
-					const value = await context.parseVariablesInString(action.options.data)
 					if (this.config.debug_messages) {
+            const value = await context.parseVariablesInString(action.options.data)
 						this.log('debug', `Message sent: ${value}`)
 					}
 					this.ws.send(JSON.stringify({
@@ -383,13 +372,17 @@ class WebsocketInstance extends InstanceBase {
 						label: 'SoundControl',
 						choices: [
               { id: 0, label: "Mute/Unmute"},
-							{ id: -1, label: 'volume+' },
-							{ id: -2, label: 'volume-' }
+							{ id: -1, label: 'Volume+' },
+							{ id: -2, label: 'Volume-' }
 						],
 						default: -1,
 					},
 				],
 				callback: async (action, context) => {
+          if (this.config.debug_messages) {
+            const value = await context.parseVariablesInString(action.options.data)
+						this.log('debug', `Message sent: ${value}`)
+					}
           if(action.options.soundControl === 0) {
             this.ws.send(JSON.stringify({
               KommanderMsg: 'KommanderMsg_Mute',
@@ -419,9 +412,8 @@ class WebsocketInstance extends InstanceBase {
 					},
 				],
 				callback: async (action, context) => {
-					this.log('debug', `Message sent`)
-					const value = await context.parseVariablesInString(action.options.pageTurn)
 					if (this.config.debug_messages) {
+            const value = await context.parseVariablesInString(action.options.pageTurn)
 						this.log('debug', `Message sent: ${value}`)
 					}
 					this.ws.send(JSON.stringify({
@@ -437,6 +429,10 @@ class WebsocketInstance extends InstanceBase {
 				name: 'Screen On/Off',
 				options: [],
 				callback: async () => {
+          if (this.config.debug_messages) {
+            const value = await context.parseVariablesInString(action.options.pageTurn)
+						this.log('debug', `Message sent: ${value}`)
+					}
 					this.ws.send(JSON.stringify({
             KommanderMsg: 'KommanderMsg_UpdateBlackScreen',
           }))
@@ -459,6 +455,10 @@ class WebsocketInstance extends InstanceBase {
 					},
 				],
 				callback: async (action) => {
+          if (this.config.debug_messages) {
+            const value = await context.parseVariablesInString(action.options.pageTurn)
+						this.log('debug', `Message sent: ${value}`)
+					}
           const komMsg = {
             KommanderMsg: '',
             params: {
@@ -466,23 +466,32 @@ class WebsocketInstance extends InstanceBase {
           };
           switch (action.options.brightContrast) {
             case 'Brightness+':
+              komMsg.KommanderMsg = 'KommanderMsg_SetScreenLight';
+              komMsg.params = {
+                light: -1
+              };
+              break;
             case 'Brightness-':
               komMsg.KommanderMsg = 'KommanderMsg_SetScreenLight';
               komMsg.params = {
-                light: action.options.brightContrast.includes('+') ? -1 : -2
+                light: -2
               };
               break;
             case 'Contrast+':
+              komMsg.KommanderMsg = 'KommanderMsg_SetScreenContrast';
+              komMsg.params = {
+                contrast: -1
+              };
+              break;
             case 'Contrast-':
               komMsg.KommanderMsg = 'KommanderMsg_SetScreenContrast';
               komMsg.params = {
-                contrast: action.options.brightContrast.includes('+') ? -1 : -2
+                contrast: -2
               };
               break;
             default:
               break;
           }
-					this.log('debug', `Message sent`)
 					this.ws.send(JSON.stringify(komMsg))
 				},
 			},
@@ -501,7 +510,10 @@ class WebsocketInstance extends InstanceBase {
 					},
 				],
 				callback: async (action) => {
-					this.log('debug', `Message sent`)
+					if (this.config.debug_messages) {
+            const value = await context.parseVariablesInString(action.options.pageTurn)
+						this.log('debug', `Message sent: ${value}`)
+					}
 					this.ws.send(JSON.stringify({
             KommanderMsg: "KommanderMsg_EnableAllMonitor",
             params: {
@@ -514,7 +526,10 @@ class WebsocketInstance extends InstanceBase {
 				name: 'Master Switch',
 				options: [],
 				callback: async () => {
-					this.log('debug', `Message sent`)
+					if (this.config.debug_messages) {
+            const value = await context.parseVariablesInString(action.options.pageTurn)
+						this.log('debug', `Message sent: ${value}`)
+					}
 					this.ws.send(JSON.stringify({
             KommanderMsg: "KommanderMsg_RoleChange",
             params: {
@@ -527,7 +542,10 @@ class WebsocketInstance extends InstanceBase {
 				name: 'Lock',
         options: [],
 				callback: async () => {
-					this.log('debug', `Message sent`)
+					if (this.config.debug_messages) {
+            const value = await context.parseVariablesInString(action.options.pageTurn)
+						this.log('debug', `Message sent: ${value}`)
+					}
 					this.ws.send(JSON.stringify({
             KommanderMsg: "KommanderMsg_SetKommanderLock",
           }))
@@ -537,4 +555,4 @@ class WebsocketInstance extends InstanceBase {
 	}
 }
 
-runEntrypoint(WebsocketInstance, upgradeScripts)
+runEntrypoint(KommanderInstance, upgradeScripts)
