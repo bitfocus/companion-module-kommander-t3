@@ -279,10 +279,9 @@ class KommanderInstance extends InstanceBase {
 						default: 'PreviousPlan',
 					},
 				],
-				callback: async (action, context) => {
+				callback: async (action) => {
 					if (this.config.debug_messages) {
-            const value = await context.parseVariablesInString(action.options.data)
-						this.log('debug', `Message sent: ${value}`)
+						this.log('debug', `Message sent: ${action.options.callPlan}`)
 					}
           if (typeof(action.options.callPlan) === 'number') {
             this.ws.send(JSON.stringify({
@@ -313,10 +312,9 @@ class KommanderInstance extends InstanceBase {
 						default: 'next',
 					},
 				],
-				callback: async (action, context) => {
+				callback: async (action) => {
 					if (this.config.debug_messages) {
-            const value = await context.parseVariablesInString(action.options.data)
-						this.log('debug', `Message sent: ${value}`)
+						this.log('debug', `Message sent: ${action.options.changePlanGroup}`)
 					}
           if (typeof(action.options.changePlanGroup) === 'number') {
             this.ws.send(JSON.stringify({
@@ -350,10 +348,9 @@ class KommanderInstance extends InstanceBase {
 						default: 'Play',
 					},
 				],
-				callback: async (action, context) => {
+				callback: async (action) => {
 					if (this.config.debug_messages) {
-            const value = await context.parseVariablesInString(action.options.data)
-						this.log('debug', `Message sent: ${value}`)
+						this.log('debug', `Message sent: ${action.options.changePlayStatus}`)
 					}
 					this.ws.send(JSON.stringify({
             KommanderMsg: `KommanderMsg_${action.options.changePlayStatus}`,
@@ -378,10 +375,9 @@ class KommanderInstance extends InstanceBase {
 						default: -1,
 					},
 				],
-				callback: async (action, context) => {
+				callback: async (action) => {
           if (this.config.debug_messages) {
-            const value = await context.parseVariablesInString(action.options.data)
-						this.log('debug', `Message sent: ${value}`)
+						this.log('debug', `Message sent: ${action.options.soundControl}`)
 					}
           if(action.options.soundControl === 0) {
             this.ws.send(JSON.stringify({
@@ -411,10 +407,9 @@ class KommanderInstance extends InstanceBase {
 						default: 'NextPage',
 					},
 				],
-				callback: async (action, context) => {
+				callback: async (action) => {
 					if (this.config.debug_messages) {
-            const value = await context.parseVariablesInString(action.options.pageTurn)
-						this.log('debug', `Message sent: ${value}`)
+						this.log('debug', `Message sent: ${action.options.pageTurn}`)
 					}
 					this.ws.send(JSON.stringify({
             KommanderMsg: `KommanderMsg_${action.options.pageTurn}`,
@@ -430,8 +425,7 @@ class KommanderInstance extends InstanceBase {
 				options: [],
 				callback: async () => {
           if (this.config.debug_messages) {
-            const value = await context.parseVariablesInString(action.options.pageTurn)
-						this.log('debug', `Message sent: ${value}`)
+						this.log('debug', 'Message sent: UpdateBlackScreen')
 					}
 					this.ws.send(JSON.stringify({
             KommanderMsg: 'KommanderMsg_UpdateBlackScreen',
@@ -456,8 +450,7 @@ class KommanderInstance extends InstanceBase {
 				],
 				callback: async (action) => {
           if (this.config.debug_messages) {
-            const value = await context.parseVariablesInString(action.options.pageTurn)
-						this.log('debug', `Message sent: ${value}`)
+						this.log('debug', `Message sent: ${action.options.brightContrast}`)
 					}
           const komMsg = {
             KommanderMsg: '',
@@ -511,8 +504,7 @@ class KommanderInstance extends InstanceBase {
 				],
 				callback: async (action) => {
 					if (this.config.debug_messages) {
-            const value = await context.parseVariablesInString(action.options.pageTurn)
-						this.log('debug', `Message sent: ${value}`)
+						this.log('debug', `Message sent: ${action.options.outputOnOff}`)
 					}
 					this.ws.send(JSON.stringify({
             KommanderMsg: "KommanderMsg_EnableAllMonitor",
@@ -526,10 +518,9 @@ class KommanderInstance extends InstanceBase {
 				name: 'Master Switch',
 				options: [],
 				callback: async () => {
-					if (this.config.debug_messages) {
-            const value = await context.parseVariablesInString(action.options.pageTurn)
-						this.log('debug', `Message sent: ${value}`)
-					}
+          if(this.config.debug_messages){
+            this.log('debug', 'Message sent: RoleChange')
+          }
 					this.ws.send(JSON.stringify({
             KommanderMsg: "KommanderMsg_RoleChange",
             params: {
@@ -542,10 +533,9 @@ class KommanderInstance extends InstanceBase {
 				name: 'Lock',
         options: [],
 				callback: async () => {
-					if (this.config.debug_messages) {
-            const value = await context.parseVariablesInString(action.options.pageTurn)
-						this.log('debug', `Message sent: ${value}`)
-					}
+          if(this.config.debug_messages){
+            this.log('debug', 'Message sent: SetKommanderLock')
+          }
 					this.ws.send(JSON.stringify({
             KommanderMsg: "KommanderMsg_SetKommanderLock",
           }))
