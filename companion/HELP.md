@@ -1,3 +1,20 @@
-## Your module
+## Kommander Media Server
+This module connects to Kommander Media Server
 
-Write some help for your users here!
+### Configuration
+
+- Type in the IP address of the device.
+- Type in the Port of the device.
+
+### Available Actions
+
+- CallPlan
+- ChangePlanGroup
+- ChangePlayStatus
+- SoundCtrol
+- PageTurn
+- Screen On/Off
+- ChangeBright&Contrast
+- Output On/Off
+- Master Switch
+- Lock
