@@ -2,14 +2,25 @@ import { InstanceBase, runEntrypoint, InstanceStatus } from '@companion-module/b
 import WebSocket from 'ws'
 import objectPath from 'object-path'
 import { upgradeScripts } from './upgrade.js'
-
+import { combineRgb } from '@companion-module/base'
 
 class KommanderInstance extends InstanceBase {
 	isInitialized = false
 
 	subscriptions = new Map()
 	wsRegex = '^wss?:\\/\\/([\\da-z\\.-]+)(:\\d{1,5})?(?:\\/(.*))?$'
-
+  // 初始播放状态
+  playStatus = 2;
+  // 静音状态
+  isMute = false;
+  // 是否黑屏
+  isBlackScreen = false;
+  // 输出口状态
+  monitorStatus = 1;
+  // 是否锁定
+  isLock = false;
+  // 预案组编号
+  groupIndex = 0;
 	async init(config) {
 		this.config = config
 
@@ -19,8 +30,8 @@ class KommanderInstance extends InstanceBase {
 		
 		//this.updateVariables()
 		this.initActions()
-		//this.initFeedbacks()
-		//this.subscribeFeedbacks()
+		this.initFeedbacks()
+		this.subscribeFeedbacks()
 	}
 
 	async destroy() {
@@ -134,14 +145,13 @@ class KommanderInstance extends InstanceBase {
 		if (this.config.debug_messages) {
 			this.log('debug', `Message received: ${data}`)
 		}
-
 		let msgValue = null
 		try {
 			msgValue = JSON.parse(data)
 		} catch (e) {
 			msgValue = data
 		}
-
+    this.onKommanderMessage(msgValue)
 		this.subscriptions.forEach((subscription) => {
 			if (subscription.variableName === '') {
 				return
@@ -159,6 +169,38 @@ class KommanderInstance extends InstanceBase {
 		})
 	}
 
+  onKommanderMessage(message) {
+    this.log('info', `onKommanderMessage:${JSON.stringify(message)}`)
+    const { KommanderMsg } = message;
+    switch (KommanderMsg) {
+      case 'KommanderMsg_GetGlobalState':
+        this.playStatus = message.data.state;
+        this.checkFeedbacks('playStatus')
+        break;
+      case 'KommanderMsg_Mute':
+        this.isMute = message.data.mute;
+        this.checkFeedbacks('unmute');
+        break;
+      case 'KommanderMsg_UpdateBlackScreen':
+        this.isBlackScreen = message.data.blackscreen;
+        this.checkFeedbacks('blackscreen');
+        break;
+      case 'KommanderMsg_GetAllMonitor':
+        this.monitorStatus = message.data.state;
+        this.checkFeedbacks('monitorStatus');
+        break;
+      case 'KommanderMsg_UpdateLockKommander':
+        this.isLock = message.data.lock;
+        this.checkFeedbacks('lock');
+        break;
+      case 'KommanderMsg_SwitchPlanPreGroup':
+        this.groupIndex = message.data.index
+        this.checkFeedbacks('preGroup');
+        break;
+    }
+    
+  }
+
 	getConfigFields() {
 		return [
 			{
@@ -168,6 +210,7 @@ class KommanderInstance extends InstanceBase {
 				tooltip: 'ws://ip:1702',
 				width: 12,
 				regex: '/' + this.wsRegex + '/',
+        default: 'ws://'
 			},
 			{
 				type: 'checkbox',
@@ -177,71 +220,137 @@ class KommanderInstance extends InstanceBase {
 				width: 6,
 				default: true,
 			},
-			{
-				type: 'checkbox',
-				id: 'append_new_line',
-				label: 'Append new line',
-				tooltip: 'Append new line (\\r\\n) to commands',
-				width: 6,
-				default: true,
-			},
-			{
-				type: 'checkbox',
-				id: 'debug_messages',
-				label: 'Debug messages',
-				tooltip: 'Log incomming and outcomming messages',
-				width: 6,
-			},
-			{
-				type: 'checkbox',
-				id: 'reset_variables',
-				label: 'Reset variables',
-				tooltip: 'Reset variables on init and on connect',
-				width: 6,
-				default: true,
-			},
 		]
 	}
 
 	initFeedbacks() {
+    const groupArr = [];
+    for(let i = 0; i< 32; i++) {
+      groupArr.push({
+        id: i,
+        label: `Group ${i+1}`
+      })
+    }
 		this.setFeedbackDefinitions({
-			websocket_variable: {
-				type: 'advanced',
-				name: 'Update variable with value from WebSocket message',
-				description:
-					'Receive messages from the WebSocket and set the value to a variable. Variables can be used on any button.',
-				options: [
-					{
-						type: 'textinput',
-						label: 'JSON Path (blank if not json)',
-						id: 'subpath',
-						default: '',
-					},
-					{
-						type: 'textinput',
-						label: 'Variable',
-						id: 'variable',
-						regex: '/^[-a-zA-Z0-9_]+$/',
-						default: '',
-					},
-				],
-				callback: () => {
-					// Nothing to do, as this feeds a variable
-					return {}
-				},
-				subscribe: (feedback) => {
-					this.subscriptions.set(feedback.id, {
-						variableName: feedback.options.variable,
-						subpath: feedback.options.subpath,
-					})
-					if (this.isInitialized) {
-						this.updateVariables(feedback.id)
-					}
-				},
-				unsubscribe: (feedback) => {
-					this.subscriptions.delete(feedback.id)
-				},
-			},
+      'playStatus': {
+        type: 'boolean',
+        name: 'playStatus',
+        defaultStyle: {
+          bgcolor: combineRgb(0, 0, 255),
+          color: combineRgb(0, 0, 0),
+        },
+        options: [{
+          type: 'dropdown',
+          label: 'select',
+          id: 'playStatus',
+          choices: [
+            { id: 0, label: 'play' },
+            { id: 1, label: 'pause' },
+            { id: 2, label: 'stop' },
+          ],
+          default: 0
+        }],
+        callback: (feedback) => {
+          this.log('info', `feedback-----> ${JSON.stringify(feedback)}`)
+          this.log('info', `播放状态:${feedback.options.playStatus}`)
+          return this.playStatus === feedback.options.playStatus
+        }
+      },
+      'unmute': {
+        type: 'boolean',
+        name: 'unmute',
+        defaultStyle: {
+          bgcolor: combineRgb(0, 0, 255),
+          color: combineRgb(0, 0, 0),
+        },
+        options: [
+          {
+            type: 'static-text',
+            label: 'unmute',
+            id: 'unmute',
+            value: 'unmute'
+          }
+        ],
+        callback: () => {
+          return this.isMute;
+        }
+      },
+      'blackscreen':{
+        type: 'boolean',
+        name: 'blackscreen',
+        defaultStyle: {
+          bgcolor: combineRgb(0, 0, 255),
+          color: combineRgb(0, 0, 0),
+        },
+        options: [
+          {
+            type: 'static-text',
+            label: 'blackscreen',
+            id: 'blackscreen',
+            value: 'blackscreen'
+          }
+        ],
+        callback: () => {
+          return this.isBlackScreen;
+        }
+      },
+      'monitorStatus': {
+        type: 'boolean',
+        name: 'monitorStatus',
+        defaultStyle: {
+          bgcolor: combineRgb(0, 0, 255),
+          color: combineRgb(0, 0, 0),
+        },
+        options: [
+          {
+            type: 'static-text',
+            label: 'output On',
+            id: 'monitorStatus',
+            value: 'monitorStatus'
+          }
+        ],
+        callback: () => {
+          return this.monitorStatus === 1;
+        }
+      },
+      'lock': {
+        type: 'boolean',
+        name: 'lock',
+        defaultStyle: {
+          bgcolor: combineRgb(0, 0, 255),
+          color: combineRgb(0, 0, 0),
+        },
+        options: [
+          {
+            type: 'static-text',
+            label: 'lock',
+            id: 'lock',
+            value: 'lock'
+          }
+        ],
+        callback: () => {
+          return this.isLock;
+        }
+      },
+      'preGroup': {
+        type: 'boolean',
+        name: 'preGroup',
+        defaultStyle: {
+          bgcolor: combineRgb(0, 0, 255),
+          color: combineRgb(0, 0, 0),
+        },
+        options: [{
+          type: 'dropdown',
+          label: 'select',
+          id: 'preGroup',
+          choices: groupArr,
+          default: 0
+        }],
+        callback: (feedback) => {
+          this.log('info', `预案组编号:${feedback.options.preGroup}`)
+          return this.groupIndex === feedback.options.preGroup
+        }
+      },
 		})
 	}
 
