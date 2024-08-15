@@ -9,6 +9,9 @@ class KommanderInstance extends InstanceBase {
 
 	subscriptions = new Map()
 	wsRegex = '^wss?:\\/\\/([\\da-z\\.-]+)(:\\d{1,5})?(?:\\/(.*))?$'
+
+	mediaData = []
+
   // 初始播放状态
   playStatus = 2;
   // 静音状态
@@ -21,6 +24,10 @@ class KommanderInstance extends InstanceBase {
   isLock = false;
   // 预案组编号
   groupIndex = 0;
+  // 预案编号
+  planIndex = 0;
+  // 当前播放的预案组-名称
+  currentName = '';
 	async init(config) {
 		this.config = config
 
@@ -29,8 +36,8 @@ class KommanderInstance extends InstanceBase {
 		// login 
 		
 		//this.updateVariables()
-		this.initActions()
-		this.initFeedbacks()
+		// this.initActions()
+		// this.initFeedbacks()
 		this.subscribeFeedbacks()
 	}
 
@@ -173,6 +180,31 @@ class KommanderInstance extends InstanceBase {
     this.log('info', `onKommanderMessage:${JSON.stringify(message)}`)
     const { KommanderMsg } = message;
     switch (KommanderMsg) {
+      case 'KommanderMsg_Authentication':
+        if (message.code === 1) {
+          //获取媒体库当中预案列表
+          this.ws.send(JSON.stringify({
+            KommanderMsg: "KommanderMsg_GetMediaLibs",
+          }))
+        }
+        break;
+      case 'KommanderMsg_GetMediaLibs':
+        if (message.code === 1) {
+          this.mediaData = (message.MediaLibs.find(data => data.MediaGroup === '播放预案' || data.MediaGrouptype === 8).data);
+          const arr = [{ id: "PlanGroupList_PlanList", label: "PlanGroupList_PlanList" }];
+          this.mediaData.forEach(group => {
+            group.data.forEach(plan => {
+              arr.push({
+                id: group.name + '@@' + plan.name,
+                label: group.name + '_' + plan.name,
+              })
+            })
+          })
+          this.mediaData = arr;
+        }
+        this.initActions();
+        this.initFeedbacks();
+        break;
       case 'KommanderMsg_GetGlobalState':
         this.playStatus = message.data.state;
         this.checkFeedbacks('playStatus')
@@ -194,7 +226,25 @@ class KommanderInstance extends InstanceBase {
         this.checkFeedbacks('lock');
         break;
       case 'KommanderMsg_SwitchPlanPreGroup':
-        this.groupIndex = message.data.index
+        this.groupIndex = message.data.index;
+        this.checkFeedbacks('preGroup');
+        break;
+      // case 'KommanderMsg_IndexInvokePrePlan':
+      //   this.planIndex = message.data.index;
+      //   this.checkFeedbacks('plan');
+      //   break;
+      // case 'KommanderMsg_ChangePlanGroupCallByName':
+      //   const { groupName, name } = message.data
+      //   this.currentName = `${groupName}-${name}`;
+      //   this.checkFeedbacks('callByName');
+      //   break;
+      case 'KommanderMsg_UpdatePrePlanUsingMark':
+        const { outPutingId, nOutGroupId, outGroupName, outPutingPrePlanName} = message.data;
+        this.planIndex = outPutingId;
+        this.groupIndex = nOutGroupId;
+        this.currentName = `${outGroupName}-${outPutingPrePlanName}`;
+        this.checkFeedbacks('plan');
+        this.checkFeedbacks('callByName');
         this.checkFeedbacks('preGroup');
         break;
     }
@@ -206,7 +256,7 @@ class KommanderInstance extends InstanceBase {
 			{
 				type: 'textinput',
 				id: 'url',
-				label: 'Target URL',
+				label: 'Kommander URL',
 				tooltip: 'ws://ip:1702',
 				width: 12,
 				regex: '/' + this.wsRegex + '/',
@@ -225,16 +275,64 @@ class KommanderInstance extends InstanceBase {
 
 	initFeedbacks() {
     const groupArr = [];
+    const planArr = [];
     for(let i = 0; i< 32; i++) {
       groupArr.push({
         id: i,
         label: `Group ${i+1}`
       })
+      planArr.push({
+        id: i,
+        label: `Plan ${i+1}`
+      })
     }
 		this.setFeedbackDefinitions({
+      'callByName': {
+        type: 'boolean',
+        name: 'CallByName',
+        defaultStyle: {
+          bgcolor: combineRgb(0, 0, 255),
+          color: combineRgb(0, 0, 0),
+        },
+        options: [
+          {
+            type: 'textinput',
+            label: 'group name',
+            id: 'groupName',
+            default: ''
+          },
+          {
+            type: 'textinput',
+            label: 'plan name',
+            id: 'planName',
+            default: ''
+          }
+        ],
+        callback: (feedback) => {
+          return this.currentName === `${feedback.options.groupName}-${feedback.options.planName}`;
+        }
+      },
+      'plan': {
+        type: 'boolean',
+        name: 'CallPlan',
+        defaultStyle: {
+          bgcolor: combineRgb(0, 0, 255),
+          color: combineRgb(0, 0, 0),
+        },
+        options: [{
+          type: 'dropdown',
+          label: 'select',
+          id: 'plan',
+          choices: planArr,
+          default: 0
+        }],
+        callback: (feedback) => {
+          return this.planIndex === feedback.options.plan
+        }
+      },
       'playStatus': {
         type: 'boolean',
-        name: 'playStatus',
+        name: 'PlayStatus',
         defaultStyle: {
           bgcolor: combineRgb(0, 0, 255),
           color: combineRgb(0, 0, 0),
@@ -251,14 +349,12 @@ class KommanderInstance extends InstanceBase {
           default: 0
         }],
         callback: (feedback) => {
-          this.log('info', `feedback-----> ${JSON.stringify(feedback)}`)
-          this.log('info', `播放状态:${feedback.options.playStatus}`)
           return this.playStatus === feedback.options.playStatus
         }
       },
       'unmute': {
         type: 'boolean',
-        name: 'unmute',
+        name: 'Unmute',
         defaultStyle: {
           bgcolor: combineRgb(0, 0, 255),
           color: combineRgb(0, 0, 0),
@@ -277,7 +373,7 @@ class KommanderInstance extends InstanceBase {
       },
       'blackscreen':{
         type: 'boolean',
-        name: 'blackscreen',
+        name: 'BlackScreen',
         defaultStyle: {
           bgcolor: combineRgb(0, 0, 255),
           color: combineRgb(0, 0, 0),
@@ -296,7 +392,7 @@ class KommanderInstance extends InstanceBase {
       },
       'monitorStatus': {
         type: 'boolean',
-        name: 'monitorStatus',
+        name: 'MonitorStatus',
         defaultStyle: {
           bgcolor: combineRgb(0, 0, 255),
           color: combineRgb(0, 0, 0),
@@ -315,7 +411,7 @@ class KommanderInstance extends InstanceBase {
       },
       'lock': {
         type: 'boolean',
-        name: 'lock',
+        name: 'Lock',
         defaultStyle: {
           bgcolor: combineRgb(0, 0, 255),
           color: combineRgb(0, 0, 0),
@@ -334,7 +430,7 @@ class KommanderInstance extends InstanceBase {
       },
       'preGroup': {
         type: 'boolean',
-        name: 'preGroup',
+        name: 'PreGroup',
         defaultStyle: {
           bgcolor: combineRgb(0, 0, 255),
           color: combineRgb(0, 0, 0),
@@ -347,7 +443,6 @@ class KommanderInstance extends InstanceBase {
           default: 0
         }],
         callback: (feedback) => {
-          this.log('info', `预案组编号:${feedback.options.preGroup}`)
           return this.groupIndex === feedback.options.preGroup
         }
       },
@@ -355,6 +450,7 @@ class KommanderInstance extends InstanceBase {
 	}
 
 	initActions() {
+    const mediaData = this.mediaData;
 		const callPlanDropDownValue = [
 			{ id: 'PreviousPlan', label: 'Previous Plan' },
 			{ id: 'NextPlan', label: 'Next Plan' },
@@ -364,6 +460,7 @@ class KommanderInstance extends InstanceBase {
 			{ id: 'pre', label: 'Previous Group' },
 			{ id: 'next', label: 'Next Group' },
 		];
+    const callTimeLineValue = [];
 
 		for( let i = 1; i<=32; i++){
 			callPlanDropDownValue.push({
@@ -374,6 +471,10 @@ class KommanderInstance extends InstanceBase {
         id: i,
         label: `Group_${i}`,
       })
+      callTimeLineValue.push({
+				id: i,
+				label: `Time_${i}`,
+			})
 		}
 		
 		this.setActionDefinitions({
@@ -570,25 +671,25 @@ class KommanderInstance extends InstanceBase {
             case 'Brightness+':
               komMsg.KommanderMsg = 'KommanderMsg_SetScreenLight';
               komMsg.params = {
-                light: -1
+                light: -101
               };
               break;
             case 'Brightness-':
               komMsg.KommanderMsg = 'KommanderMsg_SetScreenLight';
               komMsg.params = {
-                light: -2
+                light: -102
               };
               break;
             case 'Contrast+':
               komMsg.KommanderMsg = 'KommanderMsg_SetScreenContrast';
               komMsg.params = {
-                contrast: -1
+                contrast: -101
               };
               break;
             case 'Contrast-':
               komMsg.KommanderMsg = 'KommanderMsg_SetScreenContrast';
               komMsg.params = {
-                contrast: -2
+                contrast: -102
               };
               break;
             default:
@@ -633,7 +734,7 @@ class KommanderInstance extends InstanceBase {
 					this.ws.send(JSON.stringify({
             KommanderMsg: "KommanderMsg_RoleChange",
             params: {
-              bSwitch: true
+              Switch: true
             }
           }))
 				},
@@ -648,6 +749,124 @@ class KommanderInstance extends InstanceBase {
 					this.ws.send(JSON.stringify({
             KommanderMsg: "KommanderMsg_SetKommanderLock",
           }))
+				},
+			},
+      SetVolumeValue: {
+				name: 'SetVolumeValue',
+				options: [
+					{
+						id: 'SetVolumeValue',
+						type: 'number',
+						label: 'SetVolumeValue',
+						default: 100,
+						min: 0,
+						max: 100
+					},
+				],
+				callback: async (action, context) => {
+					this.ws.send(JSON.stringify({
+						KommanderMsg: `KommanderMsg_Volume`,
+						params: {
+							volume: action.options.SetVolumeValue
+						}
+					}))
+				},
+			},
+      CallByName: {
+				name: 'CallByName',
+				options: [
+					{
+						id: 'CallByName',
+						type: 'dropdown',
+						label: 'CallByName',
+						choices: mediaData,
+						default: 'PlanGroupList_PlanList',
+					},
+				],
+				callback: async (action, context) => {
+					this.ws.send(JSON.stringify({
+						KommanderMsg: "KommanderMsg_ChangePlanGroupCallByName",
+						params: {
+							select: action.options.CallByName,
+						}
+					}))
+				},
+			},
+			SetBrightValue: {
+				name: 'SetBrightValue',
+				options: [
+					{
+						id: 'SetBrightValue',
+						type: 'number',
+						label: 'SetBrightValue',
+						default: 0,
+						min: -100,
+						max: 100
+					},
+				],
+				callback: async (action, context) => {
+					this.ws.send(JSON.stringify({
+						KommanderMsg: `KommanderMsg_SetScreenLight`,
+						params: {
+							light: action.options.SetBrightValue
+						}
+					}))
+				},
+			},
+			SetContrastValue: {
+				name: 'SetContrastValue',
+				options: [
+					{
+						id: 'SetContrastValue',
+						type: 'number',
+						label: 'SetContrastValue',
+						default: 0,
+						min: -100,
+						max: 100
+					},
+				],
+				callback: async (action, context) => {
+					this.ws.send(JSON.stringify({
+						KommanderMsg: `KommanderMsg_SetScreenContrast`,
+						params: {
+							contrast: action.options.SetContrastValue
+						}
+					}))
+				},
+			},
+			CallTimeline: {
+				name: 'CallTimeline',
+				options: [
+					{
+						id: 'CallTimeline',
+						type: 'dropdown',
+						label: 'CallTimeline',
+						choices: callTimeLineValue,
+						default: 1,
+					},
+					{
+						id: 'CallTimelineStatus',
+						type: 'dropdown',
+						label: 'Status',
+						choices:  [
+							{ id: 1, label: "Toggle" },
+							{ id: 2, label: 'Play' },
+							{ id: 3, label: 'Pause' },
+							{ id: 4, label: 'Stop' },
+							{ id: 5, label: 'JumptoNextItme' },
+							{ id: 6, label: 'JumptoPreItem' }
+						],
+						default: 1,
+					},
+				],
+				callback: async (action, context) => {
+					this.ws.send(JSON.stringify({
+						KommanderMsg: "KommanderMsg_CallTimeline",
+						params: {
+							index: action.options.CallTimeline,
+							status: action.options.CallTimelineStatus,
+						}
+					}))
 				},
 			},
 		})
