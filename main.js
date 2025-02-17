@@ -28,6 +28,8 @@ class KommanderInstance extends InstanceBase {
   planIndex = 0;
   // 当前播放的预案组-名称
   currentName = '';
+  // 是否不是时间线工程 true-预案 false-时间线
+  isNotTimeLine = true;
 	async init(config) {
 		this.config = config
 
@@ -186,6 +188,7 @@ class KommanderInstance extends InstanceBase {
           this.ws.send(JSON.stringify({
             KommanderMsg: "KommanderMsg_GetMediaLibs",
           }))
+          this.isNotTimeLine = message.data.isNotTimeLine;
         }
         break;
       case 'KommanderMsg_GetMediaLibs':
@@ -349,7 +352,7 @@ class KommanderInstance extends InstanceBase {
           default: 0
         }],
         callback: (feedback) => {
-          return this.playStatus === feedback.options.playStatus
+          return this.playStatus === feedback.options.playStatus && this.isNotTimeLine
         }
       },
       'unmute': {
@@ -853,8 +856,8 @@ class KommanderInstance extends InstanceBase {
 							{ id: 2, label: 'Play' },
 							{ id: 3, label: 'Pause' },
 							{ id: 4, label: 'Stop' },
-							{ id: 5, label: 'JumptoNextItme' },
-							{ id: 6, label: 'JumptoPreItem' }
+							// { id: 5, label: 'JumptoNextItme' },
+							// { id: 6, label: 'JumptoPreItem' }
 						],
 						default: 1,
 					},
