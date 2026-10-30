@@ -3,6 +3,8 @@ import WebSocket from 'ws'
 import objectPath from 'object-path'
 import { upgradeScripts } from './upgrade.js'
 import { combineRgb } from '@companion-module/base'
+import { getPresetDefinitions } from './presets.js'
+import { getEmptyVariableValues, getVariableDefinitions, indexToNumber, PLAY_STATUS_NAMES } from './variables.js'
 
 class KommanderInstance extends InstanceBase {
 	isInitialized = false
@@ -11,6 +13,10 @@ class KommanderInstance extends InstanceBase {
 	wsRegex = '^wss?:\\/\\/([\\da-z\\.-]+)(:\\d{1,5})?(?:\\/(.*))?$'
 
 	mediaData = []
+	// plan groups from the media library (names for variables and presets)
+	planGroups = []
+	// why Kommander refused the last login, shown as the connection status
+	loginError = null
 
   // 初始播放状态
   playStatus = 2;
@@ -33,6 +39,11 @@ class KommanderInstance extends InstanceBase {
 	async init(config) {
 		this.config = config
 
+		this.initActions()
+		this.initFeedbacks()
+		this.setVariableDefinitions(getVariableDefinitions())
+		this.setVariableValues(getEmptyVariableValues())
+		this.initPresets()
 		this.initWebSocket()
 		this.isInitialized = true
 		// login 
@@ -57,6 +68,7 @@ class KommanderInstance extends InstanceBase {
 
 	async configUpdated(config) {
 		this.config = config
+		this.initPresets()
 		this.initWebSocket()
 	}
 
@@ -109,6 +121,7 @@ class KommanderInstance extends InstanceBase {
 		}
 
 		this.updateStatus(InstanceStatus.Connecting)
+		this.loginError = null
 
 		if (this.ws) {
 			this.ws.close(1000)
@@ -138,7 +151,11 @@ class KommanderInstance extends InstanceBase {
 		})
 		this.ws.on('close', (code) => {
 			this.log('debug', `Connection closed with code ${code}`)
-			this.updateStatus(InstanceStatus.Disconnected, `Connection closed with code ${code}`)
+			if (this.loginError) {
+				this.updateStatus(InstanceStatus.ConnectionFailure, `Kommander refused the login: ${this.loginError}`)
+			} else {
+				this.updateStatus(InstanceStatus.Disconnected, `Connection closed with code ${code}`)
+			}
 			this.maybeReconnect()
 		})
 
@@ -183,17 +200,24 @@ class KommanderInstance extends InstanceBase {
     const { KommanderMsg } = message;
     switch (KommanderMsg) {
       case 'KommanderMsg_Authentication':
+        if (message.code !== 1) {
+          // e.g. "Maximum connection number": Kommander closes the connection right after this
+          this.loginError = message.data?.msg ?? `error ${message.data?.error}`;
+          this.log('error', `Kommander refused the login: ${this.loginError}`);
+        }
         if (message.code === 1) {
           //获取媒体库当中预案列表
           this.ws.send(JSON.stringify({
             KommanderMsg: "KommanderMsg_GetMediaLibs",
           }))
           this.isNotTimeLine = message.data.isNotTimeLine;
+          this.setVariableValues({ project_type: this.isNotTimeLine ? 'Plan' : 'Timeline' });
         }
         break;
       case 'KommanderMsg_GetMediaLibs':
         if (message.code === 1) {
           this.mediaData = (message.MediaLibs.find(data => data.MediaGroup === '播放预案' || data.MediaGrouptype === 8).data);
+          this.planGroups = this.mediaData;
           const arr = [{ id: "PlanGroupList_PlanList", label: "PlanGroupList_PlanList" }];
           this.mediaData.forEach(group => {
             group.data.forEach(plan => {
@@ -207,30 +231,45 @@ class KommanderInstance extends InstanceBase {
         }
         this.initActions();
         this.initFeedbacks();
+        this.initPresets();
+        // Kommander only sends state changes, so ask for the current state (once the plans are known)
+        const stateRequests = ['GetGlobalState', 'GetAllMonitor', 'GetBlackScreen', 'GetKommanderLock', 'GetPrePlanUsingMark'];
+        stateRequests.forEach(request => this.ws.send(JSON.stringify({ KommanderMsg: `KommanderMsg_${request}` })));
         break;
       case 'KommanderMsg_GetGlobalState':
         this.playStatus = message.data.state;
         this.checkFeedbacks('playStatus')
+        this.setVariableValues({ play_status: PLAY_STATUS_NAMES[this.playStatus] ?? '' });
         break;
       case 'KommanderMsg_Mute':
         this.isMute = message.data.mute;
         this.checkFeedbacks('unmute');
+        this.setVariableValues({ mute: Boolean(this.isMute) });
         break;
+      case 'KommanderMsg_GetBlackScreen':
       case 'KommanderMsg_UpdateBlackScreen':
         this.isBlackScreen = message.data.blackscreen;
         this.checkFeedbacks('blackscreen');
+        this.setVariableValues({ blackscreen: Boolean(this.isBlackScreen) });
         break;
       case 'KommanderMsg_GetAllMonitor':
         this.monitorStatus = message.data.state;
         this.checkFeedbacks('monitorStatus');
+        this.setVariableValues({ output: this.monitorStatus === 1 });
         break;
+      case 'KommanderMsg_GetKommanderLock':
       case 'KommanderMsg_UpdateLockKommander':
         this.isLock = message.data.lock;
         this.checkFeedbacks('lock');
+        this.setVariableValues({ lock: Boolean(this.isLock) });
         break;
       case 'KommanderMsg_SwitchPlanPreGroup':
         this.groupIndex = message.data.index;
         this.checkFeedbacks('preGroup');
+        this.setVariableValues({
+          group_number: indexToNumber(this.groupIndex),
+          group_name: this.planGroups[this.groupIndex]?.name ?? '',
+        });
         break;
       // case 'KommanderMsg_IndexInvokePrePlan':
       //   this.planIndex = message.data.index;
@@ -242,13 +281,21 @@ class KommanderInstance extends InstanceBase {
       //   this.checkFeedbacks('callByName');
       //   break;
       case 'KommanderMsg_UpdatePrePlanUsingMark':
-        const { outPutingId, nOutGroupId, outGroupName, outPutingPrePlanName} = message.data;
+        // The reply to GetPrePlanUsingMark only has the plan id: its position and names come from the media library
+        const mark = message.data.outPutingId === undefined ? this.findPlanById(message.data.outPutingPrePlanId) : message.data;
+        const { outPutingId, nOutGroupId, outGroupName, outPutingPrePlanName} = mark;
         this.planIndex = outPutingId;
         this.groupIndex = nOutGroupId;
         this.currentName = `${outGroupName}-${outPutingPrePlanName}`;
         this.checkFeedbacks('plan');
         this.checkFeedbacks('callByName');
         this.checkFeedbacks('preGroup');
+        this.setVariableValues({
+          plan_number: indexToNumber(outPutingId),
+          plan_name: outPutingPrePlanName ?? '',
+          group_number: indexToNumber(nOutGroupId),
+          group_name: outGroupName ?? '',
+        });
         break;
     }
     
@@ -274,6 +321,21 @@ class KommanderInstance extends InstanceBase {
 				default: true,
 			},
 		]
+	}
+
+	initPresets() {
+		this.setPresetDefinitions(getPresetDefinitions(this.label, this.planGroups))
+	}
+
+	// Position and names of a plan in the shape of UpdatePrePlanUsingMark (outPutingId -1 when it isn't in the media library)
+	findPlanById(planId) {
+		for (const [g, group] of this.planGroups.entries()) {
+			const p = (group.data ?? []).findIndex((plan) => plan.id === planId)
+			if (p !== -1) {
+				return { outPutingId: p, nOutGroupId: g, outGroupName: group.name, outPutingPrePlanName: group.data[p].name }
+			}
+		}
+		return { outPutingId: -1, nOutGroupId: this.groupIndex, outGroupName: this.planGroups[this.groupIndex]?.name }
 	}
 
 	initFeedbacks() {
