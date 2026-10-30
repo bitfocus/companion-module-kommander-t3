@@ -4,21 +4,23 @@
 	"main": "main.js",
 	"type": "module",
 	"scripts": {
-		"test": "echo \"Error: no test specified\" && exit 1",
-		"format": "prettier -w ."
+		"test": "node --test",
+		"format": "prettier -w .",
+		"check": "companion-module-check",
+		"build": "companion-module-build"
 	},
 	"license": "MIT",
 	"dependencies": {
-		"@companion-module/base": "~1.4.3",
-		"object-path": "^0.11.8",
-		"ws": "^7.5.11"
+		"@companion-module/base": "~1.12.1",
+		"ws": "^8.18.3"
 	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/bitfocus/companion-module-kommander-t3"
 	},
 	"devDependencies": {
-		"@companion-module/tools": "^2.8.0"
+		"@companion-module/tools": "^2.9.1",
+		"prettier": "^3.6.2"
 	},
 	"prettier": "@companion-module/tools/.prettierrc.json"
 }

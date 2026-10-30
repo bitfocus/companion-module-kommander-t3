@@ -1,258 +1,75 @@
-import { InstanceBase, runEntrypoint, InstanceStatus } from '@companion-module/base'
+import { InstanceBase, InstanceStatus, runEntrypoint } from '@companion-module/base'
+import { networkInterfaces } from 'node:os'
 import WebSocket from 'ws'
-import objectPath from 'object-path'
+import { getActionDefinitions } from './actions.js'
+import { getFeedbackDefinitions } from './feedbacks.js'
+import { getPresetDefinitions } from './presets.js'
 import { upgradeScripts } from './upgrade.js'
-import { combineRgb } from '@companion-module/base'
+import {
+	formatTime,
+	getEmptyVariableValues,
+	getVariableDefinitions,
+	indexToNumber,
+	PLAY_STATUS_NAMES,
+} from './variables.js'
+
+const URL_REGEX = '^wss?:\\/\\/([\\da-z\\.-]+)(:\\d{1,5})?(?:\\/(.*))?$'
+// Login of Kommander's Stream Deck access, which works without any setup in Kommander
+export const DEFAULT_LOGIN = 'streamDeck'
+// Kommander only reports changes: this is asked for once the plans are known
+const STATE_REQUESTS = [
+	'GetGlobalState',
+	'GetAllMonitor',
+	'GetBlackScreen',
+	'GetKommanderLock',
+	'GetPretidingMode',
+	'GetScreenContrastLight',
+	'GetPrePlanUsingMark',
+]
+// Media type of videos, in the media library and on the canvas
+const VIDEO = 1
+
+// Kommander tells clients apart by device id: one per Companion connection, so two of them don't clash
+function deviceIdFor(connectionId) {
+	let hash = 0
+	for (const char of connectionId) hash = (hash * 31 + char.charCodeAt(0)) % 900000
+	return String(100000 + hash)
+}
+
+function localAddress() {
+	const addresses = Object.values(networkInterfaces()).flat()
+	return addresses.find((address) => address.family === 'IPv4' && !address.internal)?.address ?? '127.0.0.1'
+}
 
 class KommanderInstance extends InstanceBase {
-	isInitialized = false
+	// plan groups of the open project, from the media library
+	planGroups = []
+	planSignature = ''
+	// why Kommander refused the last login, shown as the connection status
+	loginError = null
 
-	subscriptions = new Map()
-	wsRegex = '^wss?:\\/\\/([\\da-z\\.-]+)(:\\d{1,5})?(?:\\/(.*))?$'
-
-	mediaData = []
-
-  // 初始播放状态
-  playStatus = 2;
-  // 静音状态
-  isMute = false;
-  // 是否黑屏
-  isBlackScreen = false;
-  // 输出口状态
-  monitorStatus = 1;
-  // 是否锁定
-  isLock = false;
-  // 预案组编号
-  groupIndex = 0;
-  // 预案编号
-  planIndex = 0;
-  // 当前播放的预案组-名称
-  currentName = '';
-  // 是否不是时间线工程 true-预案 false-时间线
-  isNotTimeLine = true;
 	async init(config) {
 		this.config = config
-
+		this.resetState()
+		this.setVariableDefinitions(getVariableDefinitions())
+		this.setVariableValues(getEmptyVariableValues())
+		this.initDefinitions()
 		this.initWebSocket()
-		this.isInitialized = true
-		// login 
-		
-		//this.updateVariables()
-		// this.initActions()
-		// this.initFeedbacks()
-		this.subscribeFeedbacks()
 	}
 
 	async destroy() {
-		this.isInitialized = false
-		if (this.reconnect_timer) {
-			clearTimeout(this.reconnect_timer)
-			this.reconnect_timer = null
-		}
-		if (this.ws) {
-			this.ws.close(1000)
-			delete this.ws
-		}
+		this.isDestroyed = true
+		clearTimeout(this.reconnectTimer)
+		this.stopTimers()
+		this.closeWebSocket()
 	}
 
 	async configUpdated(config) {
 		this.config = config
+		// the presets show this connection's variables, which go by its label
+		this.initPresets()
 		this.initWebSocket()
 	}
-
-	updateVariables(callerId = null) {
-		let variables = new Set()
-		let defaultValues = {}
-		this.subscriptions.forEach((subscription, subscriptionId) => {
-			if (!subscription.variableName.match(/^[-a-zA-Z0-9_]+$/)) {
-				return
-			}
-			variables.add(subscription.variableName)
-			if (callerId === null || callerId === subscriptionId) {
-				defaultValues[subscription.variableName] = ''
-			}
-		})
-		let variableDefinitions = []
-		variables.forEach((variable) => {
-			variableDefinitions.push({
-				name: variable,
-				variableId: variable,
-			})
-		})
-		this.setVariableDefinitions(variableDefinitions)
-		if (this.config.reset_variables) {
-			this.setVariableValues(defaultValues)
-		}
-	}
-
-	maybeReconnect() {
-		if (this.isInitialized && this.config.reconnect) {
-			if (this.reconnect_timer) {
-				clearTimeout(this.reconnect_timer)
-			}
-			this.reconnect_timer = setTimeout(() => {
-				this.initWebSocket()
-			}, 5000)
-		}
-	}
-
-	initWebSocket() {
-		if (this.reconnect_timer) {
-			clearTimeout(this.reconnect_timer)
-			this.reconnect_timer = null
-		}
-
-		const url = this.config.url
-		if (!url || url.match(new RegExp(this.wsRegex)) === null) {
-			this.updateStatus(InstanceStatus.BadConfig, `Invalid URL provided. Please make sure the URL is valid and matches the required format`)
-			return
-		}
-
-		this.updateStatus(InstanceStatus.Connecting)
-
-		if (this.ws) {
-			this.ws.close(1000)
-			delete this.ws
-		}
-		this.ws = new WebSocket(url, {
-      origin: "streamDeck"
-    })
-
-		this.ws.on('open', () => {
-			this.updateStatus(InstanceStatus.Ok)
-			this.log('debug', `Connection opened`)
-			if (this.config.reset_variables) {
-				this.updateVariables()
-			}
-			this.ws.send(JSON.stringify({
-				KommanderMsg: "KommanderMsg_Authentication",
-				identificationID: "10",
-				params: {
-					username: "streamDeck",
-					password: "streamDeck",
-					ip: "192.168.0.129",
-					deviceId: "103291",
-          connetType: 5
-				}
-			}))
-		})
-		this.ws.on('close', (code) => {
-			this.log('debug', `Connection closed with code ${code}`)
-			this.updateStatus(InstanceStatus.Disconnected, `Connection closed with code ${code}`)
-			this.maybeReconnect()
-		})
-
-		this.ws.on('message', this.messageReceivedFromWebSocket.bind(this))
-
-		this.ws.on('error', (data) => {
-			this.log('error', `WebSocket error: ${data}`)
-		})
-		
-	}
-
-	messageReceivedFromWebSocket(data) {
-		if (this.config.debug_messages) {
-			this.log('debug', `Message received: ${data}`)
-		}
-		let msgValue = null
-		try {
-			msgValue = JSON.parse(data)
-		} catch (e) {
-			msgValue = data
-		}
-    this.onKommanderMessage(msgValue)
-		this.subscriptions.forEach((subscription) => {
-			if (subscription.variableName === '') {
-				return
-			}
-			if (subscription.subpath === '') {
-				this.setVariableValues({
-					[subscription.variableName]: typeof msgValue === 'object' ? JSON.stringify(msgValue) : msgValue,
-				})
-			} else if (typeof msgValue === 'object' && objectPath.has(msgValue, subscription.subpath)) {
-				let value = objectPath.get(msgValue, subscription.subpath)
-				this.setVariableValues({
-					[subscription.variableName]: typeof value === 'object' ? JSON.stringify(value) : value,
-				})
-			}
-		})
-	}
-
-  onKommanderMessage(message) {
-    this.log('info', `onKommanderMessage:${JSON.stringify(message)}`)
-    const { KommanderMsg } = message;
-    switch (KommanderMsg) {
-      case 'KommanderMsg_Authentication':
-        if (message.code === 1) {
-          //获取媒体库当中预案列表
-          this.ws.send(JSON.stringify({
-            KommanderMsg: "KommanderMsg_GetMediaLibs",
-          }))
-          this.isNotTimeLine = message.data.isNotTimeLine;
-        }
-        break;
-      case 'KommanderMsg_GetMediaLibs':
-        if (message.code === 1) {
-          this.mediaData = (message.MediaLibs.find(data => data.MediaGroup === '播放预案' || data.MediaGrouptype === 8).data);
-          const arr = [{ id: "PlanGroupList_PlanList", label: "PlanGroupList_PlanList" }];
-          this.mediaData.forEach(group => {
-            group.data.forEach(plan => {
-              arr.push({
-                id: group.name + '@@' + plan.name,
-                label: group.name + '_' + plan.name,
-              })
-            })
-          })
-          this.mediaData = arr;
-        }
-        this.initActions();
-        this.initFeedbacks();
-        break;
-      case 'KommanderMsg_GetGlobalState':
-        this.playStatus = message.data.state;
-        this.checkFeedbacks('playStatus')
-        break;
-      case 'KommanderMsg_Mute':
-        this.isMute = message.data.mute;
-        this.checkFeedbacks('unmute');
-        break;
-      case 'KommanderMsg_UpdateBlackScreen':
-        this.isBlackScreen = message.data.blackscreen;
-        this.checkFeedbacks('blackscreen');
-        break;
-      case 'KommanderMsg_GetAllMonitor':
-        this.monitorStatus = message.data.state;
-        this.checkFeedbacks('monitorStatus');
-        break;
-      case 'KommanderMsg_UpdateLockKommander':
-        this.isLock = message.data.lock;
-        this.checkFeedbacks('lock');
-        break;
-      case 'KommanderMsg_SwitchPlanPreGroup':
-        this.groupIndex = message.data.index;
-        this.checkFeedbacks('preGroup');
-        break;
-      // case 'KommanderMsg_IndexInvokePrePlan':
-      //   this.planIndex = message.data.index;
-      //   this.checkFeedbacks('plan');
-      //   break;
-      // case 'KommanderMsg_ChangePlanGroupCallByName':
-      //   const { groupName, name } = message.data
-      //   this.currentName = `${groupName}-${name}`;
-      //   this.checkFeedbacks('callByName');
-      //   break;
-      case 'KommanderMsg_UpdatePrePlanUsingMark':
-        const { outPutingId, nOutGroupId, outGroupName, outPutingPrePlanName} = message.data;
-        this.planIndex = outPutingId;
-        this.groupIndex = nOutGroupId;
-        this.currentName = `${outGroupName}-${outPutingPrePlanName}`;
-        this.checkFeedbacks('plan');
-        this.checkFeedbacks('callByName');
-        this.checkFeedbacks('preGroup');
-        break;
-    }
-    
-  }
 
 	getConfigFields() {
 		return [
@@ -260,619 +77,404 @@ class KommanderInstance extends InstanceBase {
 				type: 'textinput',
 				id: 'url',
 				label: 'Kommander URL',
-				tooltip: 'ws://ip:1702',
+				tooltip: 'ws://<ip>:1702',
 				width: 12,
-				regex: '/' + this.wsRegex + '/',
-        default: 'ws://'
+				regex: `/${URL_REGEX}/`,
+				default: 'ws://127.0.0.1:1702',
 			},
+			{
+				type: 'textinput',
+				id: 'username',
+				label: 'Username',
+				tooltip: 'A user of Kommander (System Settings > Users). The default works without any setup',
+				width: 6,
+				default: DEFAULT_LOGIN,
+			},
+			{ type: 'textinput', id: 'password', label: 'Password', width: 6, default: DEFAULT_LOGIN },
 			{
 				type: 'checkbox',
 				id: 'reconnect',
 				label: 'Reconnect',
-				tooltip: 'Reconnect on WebSocket error (after 5 secs)',
+				tooltip: 'Reconnect 5 seconds after the connection drops',
 				width: 6,
 				default: true,
+			},
+			{
+				type: 'checkbox',
+				id: 'debug_messages',
+				label: 'Log messages',
+				tooltip: 'Log every message to and from Kommander (debug level)',
+				width: 6,
+				default: false,
 			},
 		]
 	}
 
-	initFeedbacks() {
-    const groupArr = [];
-    const planArr = [];
-    for(let i = 0; i< 32; i++) {
-      groupArr.push({
-        id: i,
-        label: `Group ${i+1}`
-      })
-      planArr.push({
-        id: i,
-        label: `Plan ${i+1}`
-      })
-    }
-		this.setFeedbackDefinitions({
-      'callByName': {
-        type: 'boolean',
-        name: 'CallByName',
-        defaultStyle: {
-          bgcolor: combineRgb(0, 0, 255),
-          color: combineRgb(0, 0, 0),
-        },
-        options: [
-          {
-            type: 'textinput',
-            label: 'group name',
-            id: 'groupName',
-            default: ''
-          },
-          {
-            type: 'textinput',
-            label: 'plan name',
-            id: 'planName',
-            default: ''
-          }
-        ],
-        callback: (feedback) => {
-          return this.currentName === `${feedback.options.groupName}-${feedback.options.planName}`;
-        }
-      },
-      'plan': {
-        type: 'boolean',
-        name: 'CallPlan',
-        defaultStyle: {
-          bgcolor: combineRgb(0, 0, 255),
-          color: combineRgb(0, 0, 0),
-        },
-        options: [{
-          type: 'dropdown',
-          label: 'select',
-          id: 'plan',
-          choices: planArr,
-          default: 0
-        }],
-        callback: (feedback) => {
-          return this.planIndex === feedback.options.plan
-        }
-      },
-      'playStatus': {
-        type: 'boolean',
-        name: 'PlayStatus',
-        defaultStyle: {
-          bgcolor: combineRgb(0, 0, 255),
-          color: combineRgb(0, 0, 0),
-        },
-        options: [{
-          type: 'dropdown',
-          label: 'select',
-          id: 'playStatus',
-          choices: [
-            { id: 0, label: 'play' },
-            { id: 1, label: 'pause' },
-            { id: 2, label: 'stop' },
-          ],
-          default: 0
-        }],
-        callback: (feedback) => {
-          return this.playStatus === feedback.options.playStatus && this.isNotTimeLine
-        }
-      },
-      'unmute': {
-        type: 'boolean',
-        name: 'Unmute',
-        defaultStyle: {
-          bgcolor: combineRgb(0, 0, 255),
-          color: combineRgb(0, 0, 0),
-        },
-        options: [
-          {
-            type: 'static-text',
-            label: 'unmute',
-            id: 'unmute',
-            value: 'unmute'
-          }
-        ],
-        callback: () => {
-          return this.isMute;
-        }
-      },
-      'blackscreen':{
-        type: 'boolean',
-        name: 'BlackScreen',
-        defaultStyle: {
-          bgcolor: combineRgb(0, 0, 255),
-          color: combineRgb(0, 0, 0),
-        },
-        options: [
-          {
-            type: 'static-text',
-            label: 'blackscreen',
-            id: 'blackscreen',
-            value: 'blackscreen'
-          }
-        ],
-        callback: () => {
-          return this.isBlackScreen;
-        }
-      },
-      'monitorStatus': {
-        type: 'boolean',
-        name: 'MonitorStatus',
-        defaultStyle: {
-          bgcolor: combineRgb(0, 0, 255),
-          color: combineRgb(0, 0, 0),
-        },
-        options: [
-          {
-            type: 'static-text',
-            label: 'output On',
-            id: 'monitorStatus',
-            value: 'monitorStatus'
-          }
-        ],
-        callback: () => {
-          return this.monitorStatus === 1;
-        }
-      },
-      'lock': {
-        type: 'boolean',
-        name: 'Lock',
-        defaultStyle: {
-          bgcolor: combineRgb(0, 0, 255),
-          color: combineRgb(0, 0, 0),
-        },
-        options: [
-          {
-            type: 'static-text',
-            label: 'lock',
-            id: 'lock',
-            value: 'lock'
-          }
-        ],
-        callback: () => {
-          return this.isLock;
-        }
-      },
-      'preGroup': {
-        type: 'boolean',
-        name: 'PreGroup',
-        defaultStyle: {
-          bgcolor: combineRgb(0, 0, 255),
-          color: combineRgb(0, 0, 0),
-        },
-        options: [{
-          type: 'dropdown',
-          label: 'select',
-          id: 'preGroup',
-          choices: groupArr,
-          default: 0
-        }],
-        callback: (feedback) => {
-          return this.groupIndex === feedback.options.preGroup
-        }
-      },
+	// Kommander's state as last reported, null while unknown
+	resetState() {
+		this.stopTimers()
+		this.isNotTimeLine = true
+		this.playStatus = null
+		this.isMute = false
+		this.isBlackScreen = false
+		this.monitorStatus = null
+		this.isLock = false
+		this.realMode = null
+		this.groupIndex = null
+		this.planIndex = null
+		this.currentName = ''
+		this.previewIndex = null
+		this.previewName = ''
+		this.recording = false
+		// files on the canvases (on air and preview) by id: name, type, mute, volume, state, position, duration
+		this.files = new Map()
+	}
+
+	stopTimers() {
+		clearTimeout(this.libraryTimer)
+		clearInterval(this.videoTimer)
+		clearInterval(this.recordTimer)
+		this.videoTimer = null
+		this.recordTimer = null
+	}
+
+	initDefinitions() {
+		this.setActionDefinitions(getActionDefinitions(this))
+		this.setFeedbackDefinitions(getFeedbackDefinitions(this))
+		this.initPresets()
+	}
+
+	initPresets() {
+		this.setPresetDefinitions(getPresetDefinitions(this.label, this.planGroups))
+	}
+
+	initWebSocket() {
+		clearTimeout(this.reconnectTimer)
+		this.closeWebSocket()
+		this.resetState()
+		this.setVariableValues(getEmptyVariableValues())
+		this.checkFeedbacks()
+
+		const url = this.config.url
+		if (!url || !new RegExp(URL_REGEX).test(url)) {
+			this.updateStatus(InstanceStatus.BadConfig, 'The Kommander URL must look like ws://<ip>:1702')
+			return
+		}
+		this.updateStatus(InstanceStatus.Connecting)
+		this.loginError = null
+		this.stateRequested = false
+
+		const ws = new WebSocket(url, { origin: 'streamDeck' })
+		this.ws = ws
+		ws.on('open', () => this.login())
+		ws.on('message', (data) => this.messageReceived(data))
+		ws.on('error', (error) => {
+			// while Kommander is off this repeats every 5 seconds: log it once
+			if (error.message !== this.lastError) this.log('error', `WebSocket error: ${error.message}`)
+			this.lastError = error.message
+		})
+		ws.on('close', (code) => {
+			this.log('debug', `Connection closed with code ${code}`)
+			this.stopTimers()
+			if (this.loginError) {
+				this.updateStatus(InstanceStatus.ConnectionFailure, `Kommander refused the login: ${this.loginError}`)
+			} else {
+				this.updateStatus(InstanceStatus.Disconnected, `Connection closed with code ${code}`)
+			}
+			this.maybeReconnect()
 		})
 	}
 
-	initActions() {
-    const mediaData = this.mediaData;
-		const callPlanDropDownValue = [
-			{ id: 'PreviousPlan', label: 'Previous Plan' },
-			{ id: 'NextPlan', label: 'Next Plan' },
-		];
+	// Closes the connection without the reconnect its close event would start
+	closeWebSocket() {
+		if (!this.ws) return
+		this.ws.removeAllListeners()
+		// closing before the connection is up emits an error: nothing to report
+		this.ws.on('error', () => {})
+		this.ws.close(1000)
+		delete this.ws
+	}
 
-    const changePlanGroupDropDownValue = [
-			{ id: 'pre', label: 'Previous Group' },
-			{ id: 'next', label: 'Next Group' },
-		];
-    const callTimeLineValue = [];
+	maybeReconnect() {
+		if (this.isDestroyed || !this.config.reconnect) return
+		clearTimeout(this.reconnectTimer)
+		this.reconnectTimer = setTimeout(() => this.initWebSocket(), 5000)
+	}
 
-		for( let i = 1; i<=32; i++){
-			callPlanDropDownValue.push({
-				id: i,
-				label: `Plan_${i}`,
-			})
-      changePlanGroupDropDownValue.push({
-        id: i,
-        label: `Group_${i}`,
-      })
-      callTimeLineValue.push({
-				id: i,
-				label: `Time_${i}`,
-			})
+	login() {
+		this.send(
+			'Authentication',
+			{
+				username: this.config.username || DEFAULT_LOGIN,
+				password: this.config.password || DEFAULT_LOGIN,
+				ip: localAddress(),
+				deviceId: deviceIdFor(this.id),
+				connetType: 5,
+			},
+			{ identificationID: '10' },
+		)
+	}
+
+	// Sends KommanderMsg_<name>; false when there is no connection
+	send(name, params, extra = {}) {
+		if (this.ws?.readyState !== WebSocket.OPEN) {
+			this.log('warn', `Not connected to Kommander: ${name} not sent`)
+			return false
 		}
-		
-		this.setActionDefinitions({
-			callPlan: {
-				name: 'CallPlan',
-				options: [
-					{
-						id: 'callPlan',
-						type: 'dropdown',
-						label: 'Previous Plan',
-						choices: callPlanDropDownValue,
-						default: 'PreviousPlan',
-					},
-				],
-				callback: async (action) => {
-					if (this.config.debug_messages) {
-						this.log('debug', `Message sent: ${action.options.callPlan}`)
+		const message = { KommanderMsg: `KommanderMsg_${name}`, ...extra }
+		if (params !== undefined) message.params = params
+		if (this.config.debug_messages) this.log('debug', `Sent: ${JSON.stringify(message)}`)
+		this.ws.send(JSON.stringify(message))
+		return true
+	}
+
+	messageReceived(data) {
+		if (this.config.debug_messages) this.log('debug', `Received: ${data}`)
+		let message
+		try {
+			message = JSON.parse(data)
+		} catch {
+			this.log('warn', `Not a Kommander message: ${data}`)
+			return
+		}
+		this.handleMessage(String(message.KommanderMsg).replace('KommanderMsg_', ''), message)
+	}
+
+	handleMessage(name, message) {
+		const data = message.data ?? {}
+		switch (name) {
+			case 'Authentication':
+				if (message.code !== 1) {
+					// e.g. "Maximum connection number": Kommander closes the connection right after this
+					this.loginError = data.msg ?? `error ${data.error}`
+					this.log('error', `Kommander refused the login: ${this.loginError}`)
+					break
+				}
+				this.lastError = null
+				this.isNotTimeLine = data.isNotTimeLine
+				this.updateStatus(InstanceStatus.Ok)
+				this.setVariableValues({ project_type: this.isNotTimeLine ? 'Plan' : 'Timeline' })
+				this.send('GetMediaLibs')
+				break
+			case 'GetMediaLibs': {
+				const plans =
+					message.code === 1
+						? message.MediaLibs?.find((library) => library.MediaGroup === '播放预案' || library.MediaGrouptype === 8)
+						: undefined
+				this.updatePlanGroups(plans?.data ?? [])
+				if (!this.stateRequested) {
+					this.stateRequested = true
+					STATE_REQUESTS.forEach((request) => this.send(request))
+				}
+				break
+			}
+			case 'MediaLibsChanged':
+				// Sent when plans are edited and when a plan goes on air (also after a Take, which has no notice of
+				// its own): refresh both once things settle
+				clearTimeout(this.libraryTimer)
+				this.libraryTimer = setTimeout(() => {
+					this.send('GetMediaLibs')
+					this.send('GetPrePlanUsingMark')
+				}, 300)
+				break
+			case 'GetGlobalState':
+				this.playStatus = data.state
+				this.checkFeedbacks('playStatus')
+				this.setVariableValues({ play_status: PLAY_STATUS_NAMES[data.state] ?? '' })
+				break
+			case 'Mute':
+				this.isMute = data.mute
+				this.checkFeedbacks('unmute')
+				this.setVariableValues({ mute: Boolean(data.mute) })
+				break
+			case 'Volume':
+				if (typeof data.volume === 'number') this.setVariableValues({ volume: data.volume })
+				break
+			case 'GetScreenContrastLight':
+				this.setVariableValues({ brightness: data.light, contrast: data.contrast })
+				break
+			case 'GetBlackScreen':
+			case 'UpdateBlackScreen':
+				this.isBlackScreen = data.blackscreen
+				this.checkFeedbacks('blackscreen')
+				this.setVariableValues({ blackscreen: Boolean(data.blackscreen) })
+				break
+			case 'GetAllMonitor':
+				this.monitorStatus = data.state
+				this.checkFeedbacks('monitorStatus')
+				this.setVariableValues({ output: data.state === 1 })
+				break
+			case 'GetKommanderLock':
+			case 'UpdateLockKommander':
+				this.isLock = data.lock
+				this.checkFeedbacks('lock')
+				this.setVariableValues({ lock: Boolean(data.lock) })
+				break
+			case 'GetPretidingMode':
+			case 'SetPretidingMode':
+				// the reply to SetPretidingMode has no data, the notice that follows has the mode
+				if (typeof data.realMode !== 'boolean') break
+				this.realMode = data.realMode
+				this.checkFeedbacks('previewMode', 'previewPlan', 'previewByName')
+				this.setVariableValues({ preview_mode: !data.realMode })
+				break
+			case 'SwitchPlanPreGroup':
+				this.groupIndex = data.index
+				this.checkFeedbacks('preGroup')
+				this.setVariableValues({
+					group_number: indexToNumber(data.index),
+					group_name: this.planGroups[data.index]?.name ?? '',
+				})
+				break
+			case 'UpdatePrePlanUsingMark':
+				this.updatePlans(data)
+				break
+			case 'UpdateProgFileList':
+				for (const file of Array.isArray(message.data) ? message.data : []) {
+					this.updateFile(file.id, { name: file.name, type: file.media?.type, mute: file.bMute })
+				}
+				this.updateVideo()
+				break
+			case 'DeleteProgFile':
+				this.files.delete(data.id)
+				this.updateVideo()
+				break
+			case 'SetProgFileMute':
+				// also the reply to our own SetProgFileMute, which has no data
+				if (data.id) this.updateFile(data.id, { mute: data.bMute })
+				break
+			case 'UpdateProgFileVolume':
+				this.updateFile(data.id, { volume: data.volume })
+				break
+			case 'UpdateProgFilePlayState':
+				this.updateFile(data.id, { state: data.state, position: Number(data.curPos), duration: Number(data.duration) })
+				this.updateVideo()
+				break
+			case 'GetProgFilePlayState':
+				// the reply has no file id: it is about the video asked for last
+				if (!this.videoAsked) break
+				this.updateFile(this.videoAsked, {
+					state: data.state,
+					position: Number(data.curPos),
+					duration: Number(data.duration),
+				})
+				this.updateVideo()
+				break
+			case 'StartVideoRecord':
+			case 'StopVideoRecord':
+				if (message.code === 1) this.setRecording(name === 'StartVideoRecord')
+				break
+		}
+	}
+
+	// The plan lists (actions, feedbacks, presets) are rebuilt only when the plans changed
+	updatePlanGroups(groups) {
+		this.planGroups = groups
+		const signature = JSON.stringify(groups.map((group) => [group.name, (group.data ?? []).map((plan) => plan.name)]))
+		if (signature === this.planSignature) return
+		this.planSignature = signature
+		this.initDefinitions()
+	}
+
+	// Plans on air and in preview. Kommander's notice has their positions and names, but the reply to
+	// GetPrePlanUsingMark only has their ids, so those come from the media library
+	updatePlans(data) {
+		const onAir =
+			data.outPutingId === undefined
+				? this.findPlan(data.outPutingPrePlanId, this.groupIndex)
+				: {
+						index: data.outPutingId,
+						groupIndex: data.nOutGroupId,
+						group: data.outGroupName,
+						name: data.outPutingPrePlanName,
 					}
-          if (typeof(action.options.callPlan) === 'number') {
-            this.ws.send(JSON.stringify({
-              KommanderMsg: "KommanderMsg_IndexInvokePrePlan",
-              params: {
-                index: action.options.callPlan - 1,
-                onlySetReal: true
-              }
-            }))
-          }else{
-            this.ws.send(JSON.stringify({
-              KommanderMsg: "KommanderMsg_PrePlanNextOrPre",
-              params: {
-                next: action.options.callPlan === 'NextPlan', // true下一条
-              }
-            }))
-          }
-				},
-			},
-      ChangePlanGroup: {
-				name: 'ChangePlanGroup',
-				options: [
-					{
-						id: 'changePlanGroup',
-						type: 'dropdown',
-						label: 'next',
-						choices: changePlanGroupDropDownValue,
-						default: 'next',
-					},
-				],
-				callback: async (action) => {
-					if (this.config.debug_messages) {
-						this.log('debug', `Message sent: ${action.options.changePlanGroup}`)
+		const preview =
+			data.editingId === undefined
+				? this.findPlan(data.editingPrePlanId)
+				: {
+						index: data.editingId,
+						groupIndex: data.nEditGroupId,
+						group: data.EditGroupName,
+						name: data.editingPrePlanName,
 					}
-          if (typeof(action.options.changePlanGroup) === 'number') {
-            this.ws.send(JSON.stringify({
-              KommanderMsg: "KommanderMsg_SwitchPlanPreGroup",
-              params: {
-                index: action.options.changePlanGroup - 1,
-              }
-            }))
-          }else{
-            this.ws.send(JSON.stringify({
-              KommanderMsg: "KommanderMsg_SwitchPlanPreGroup",
-              params: {
-                type: action.options.changePlanGroup,
-              }
-            }))
-          }
-				},
-			},
-			ChangePlayStatus: {
-				name: 'ChangePlayStatus',
-				options: [
-					{
-						id: 'changePlayStatus',
-						type: 'dropdown',
-						label: 'ChangePlayStatus',
-						choices: [
-							{ id: 'Play', label: 'Play' },
-							{ id: 'Pause', label: 'Pause' },
-							{ id: 'Stop', label: "Stop"}
-						],
-						default: 'Play',
-					},
-				],
-				callback: async (action) => {
-					if (this.config.debug_messages) {
-						this.log('debug', `Message sent: ${action.options.changePlayStatus}`)
-					}
-					this.ws.send(JSON.stringify({
-            KommanderMsg: `KommanderMsg_${action.options.changePlayStatus}`,
-            params: {
-              onlySetReal: true
-            }
-          }))
-				},
-			},
-      SoundControl: {
-				name: 'SoundControl',
-				options: [
-					{
-						id: 'soundControl',
-						type: 'dropdown',
-						label: 'SoundControl',
-						choices: [
-              { id: 0, label: "Mute/Unmute"},
-							{ id: -1, label: 'Volume+' },
-							{ id: -2, label: 'Volume-' }
-						],
-						default: -1,
-					},
-				],
-				callback: async (action) => {
-          if (this.config.debug_messages) {
-						this.log('debug', `Message sent: ${action.options.soundControl}`)
-					}
-          if(action.options.soundControl === 0) {
-            this.ws.send(JSON.stringify({
-              KommanderMsg: 'KommanderMsg_Mute',
-            }))
-          }else{
-            this.ws.send(JSON.stringify({
-              KommanderMsg: `KommanderMsg_Volume`,
-              params: {
-                volume: action.options.soundControl
-              }
-            }))
-          }
-				},
-			},
-      PageTurn: {
-				name: 'PageTurn',
-				options: [
-					{
-						id: 'pageTurn',
-						type: 'dropdown',
-						label: 'PageTurn',
-						choices: [
-							{ id: 'PrevPage', label: 'PageUP' },
-							{ id: 'NextPage', label: 'PageDown' }
-						],
-						default: 'NextPage',
-					},
-				],
-				callback: async (action) => {
-					if (this.config.debug_messages) {
-						this.log('debug', `Message sent: ${action.options.pageTurn}`)
-					}
-					this.ws.send(JSON.stringify({
-            KommanderMsg: `KommanderMsg_${action.options.pageTurn}`,
-            params: {
-              isGlobalTurnPage: true,
-              onlySetReal: true
-            }
-          }))
-				},
-			},
-      ScreenOnOff: {
-				name: 'Screen On/Off',
-				options: [],
-				callback: async () => {
-          if (this.config.debug_messages) {
-						this.log('debug', 'Message sent: UpdateBlackScreen')
-					}
-					this.ws.send(JSON.stringify({
-            KommanderMsg: 'KommanderMsg_UpdateBlackScreen',
-          }))
-				},
-			},
-      BrightContrast: {
-				name: 'Bright&Contrast',
-				options: [
-					{
-						id: 'brightContrast',
-						type: 'dropdown',
-						label: 'Bright&Contrast',
-						choices: [
-							{ id: 'Brightness+', label: 'Brightness+' },
-							{ id: 'Brightness-', label: 'Brightness-' },
-              { id: 'Contrast+', label: 'Contrast+' },
-							{ id: 'Contrast-', label: 'Contrast-' }
-						],
-						default: 'Brightness+',
-					},
-				],
-				callback: async (action) => {
-          if (this.config.debug_messages) {
-						this.log('debug', `Message sent: ${action.options.brightContrast}`)
-					}
-          const komMsg = {
-            KommanderMsg: '',
-            params: {
-            }
-          };
-          switch (action.options.brightContrast) {
-            case 'Brightness+':
-              komMsg.KommanderMsg = 'KommanderMsg_SetScreenLight';
-              komMsg.params = {
-                light: -101
-              };
-              break;
-            case 'Brightness-':
-              komMsg.KommanderMsg = 'KommanderMsg_SetScreenLight';
-              komMsg.params = {
-                light: -102
-              };
-              break;
-            case 'Contrast+':
-              komMsg.KommanderMsg = 'KommanderMsg_SetScreenContrast';
-              komMsg.params = {
-                contrast: -101
-              };
-              break;
-            case 'Contrast-':
-              komMsg.KommanderMsg = 'KommanderMsg_SetScreenContrast';
-              komMsg.params = {
-                contrast: -102
-              };
-              break;
-            default:
-              break;
-          }
-					this.ws.send(JSON.stringify(komMsg))
-				},
-			},
-      OutputOnOff: {
-				name: 'Output On/Off',
-				options: [
-					{
-						id: 'outputOnOff',
-						type: 'dropdown',
-						label: 'Output On/Off',
-						choices: [
-							{ id: 0, label: 'Off' },
-							{ id: 1, label: 'On' }
-						],
-						default: '1',
-					},
-				],
-				callback: async (action) => {
-					if (this.config.debug_messages) {
-						this.log('debug', `Message sent: ${action.options.outputOnOff}`)
-					}
-					this.ws.send(JSON.stringify({
-            KommanderMsg: "KommanderMsg_EnableAllMonitor",
-            params: {
-              bOpen: Boolean(action.options.outputOnOff)
-            }
-          }))
-				},
-			},
-      MasterSwitch: {
-				name: 'Master Switch',
-				options: [],
-				callback: async () => {
-          if(this.config.debug_messages){
-            this.log('debug', 'Message sent: RoleChange')
-          }
-					this.ws.send(JSON.stringify({
-            KommanderMsg: "KommanderMsg_RoleChange",
-            params: {
-              Switch: true
-            }
-          }))
-				},
-			},
-      Lock: {
-				name: 'Lock',
-        options: [],
-				callback: async () => {
-          if(this.config.debug_messages){
-            this.log('debug', 'Message sent: SetKommanderLock')
-          }
-					this.ws.send(JSON.stringify({
-            KommanderMsg: "KommanderMsg_SetKommanderLock",
-          }))
-				},
-			},
-      SetVolumeValue: {
-				name: 'SetVolumeValue',
-				options: [
-					{
-						id: 'SetVolumeValue',
-						type: 'number',
-						label: 'SetVolumeValue',
-						default: 100,
-						min: 0,
-						max: 100
-					},
-				],
-				callback: async (action, context) => {
-					this.ws.send(JSON.stringify({
-						KommanderMsg: `KommanderMsg_Volume`,
-						params: {
-							volume: action.options.SetVolumeValue
-						}
-					}))
-				},
-			},
-      CallByName: {
-				name: 'CallByName',
-				options: [
-					{
-						id: 'CallByName',
-						type: 'dropdown',
-						label: 'CallByName',
-						choices: mediaData,
-						default: 'PlanGroupList_PlanList',
-					},
-				],
-				callback: async (action, context) => {
-					this.ws.send(JSON.stringify({
-						KommanderMsg: "KommanderMsg_ChangePlanGroupCallByName",
-						params: {
-							select: action.options.CallByName,
-						}
-					}))
-				},
-			},
-			SetBrightValue: {
-				name: 'SetBrightValue',
-				options: [
-					{
-						id: 'SetBrightValue',
-						type: 'number',
-						label: 'SetBrightValue',
-						default: 0,
-						min: -100,
-						max: 100
-					},
-				],
-				callback: async (action, context) => {
-					this.ws.send(JSON.stringify({
-						KommanderMsg: `KommanderMsg_SetScreenLight`,
-						params: {
-							light: action.options.SetBrightValue
-						}
-					}))
-				},
-			},
-			SetContrastValue: {
-				name: 'SetContrastValue',
-				options: [
-					{
-						id: 'SetContrastValue',
-						type: 'number',
-						label: 'SetContrastValue',
-						default: 0,
-						min: -100,
-						max: 100
-					},
-				],
-				callback: async (action, context) => {
-					this.ws.send(JSON.stringify({
-						KommanderMsg: `KommanderMsg_SetScreenContrast`,
-						params: {
-							contrast: action.options.SetContrastValue
-						}
-					}))
-				},
-			},
-			CallTimeline: {
-				name: 'CallTimeline',
-				options: [
-					{
-						id: 'CallTimeline',
-						type: 'dropdown',
-						label: 'CallTimeline',
-						choices: callTimeLineValue,
-						default: 1,
-					},
-					{
-						id: 'CallTimelineStatus',
-						type: 'dropdown',
-						label: 'Status',
-						choices:  [
-							{ id: 1, label: "Toggle" },
-							{ id: 2, label: 'Play' },
-							{ id: 3, label: 'Pause' },
-							{ id: 4, label: 'Stop' },
-							// { id: 5, label: 'JumptoNextItme' },
-							// { id: 6, label: 'JumptoPreItem' }
-						],
-						default: 1,
-					},
-				],
-				callback: async (action, context) => {
-					this.ws.send(JSON.stringify({
-						KommanderMsg: "KommanderMsg_CallTimeline",
-						params: {
-							index: action.options.CallTimeline,
-							status: action.options.CallTimelineStatus,
-						}
-					}))
-				},
-			},
+		this.planIndex = onAir.index
+		this.groupIndex = onAir.groupIndex
+		this.currentName = `${onAir.group}-${onAir.name}`
+		this.previewIndex = preview.index
+		this.previewName = `${preview.group}-${preview.name}`
+		this.checkFeedbacks('plan', 'callByName', 'preGroup', 'previewPlan', 'previewByName')
+		this.setVariableValues({
+			plan_number: indexToNumber(onAir.index),
+			plan_name: onAir.name ?? '',
+			group_number: indexToNumber(onAir.groupIndex),
+			group_name: onAir.group ?? '',
+			preview_plan_number: indexToNumber(preview.index),
+			preview_plan_name: preview.name ?? '',
+			preview_group_number: indexToNumber(preview.groupIndex),
+			preview_group_name: preview.group ?? '',
 		})
+	}
+
+	// Position and names of a plan of the media library (index -1 when it isn't there)
+	findPlan(planId, groupIndex = -1) {
+		for (const [g, group] of this.planGroups.entries()) {
+			const p = (group.data ?? []).findIndex((plan) => plan.id === planId)
+			if (p !== -1) return { index: p, groupIndex: g, group: group.name, name: group.data[p].name }
+		}
+		return { index: -1, groupIndex, group: this.planGroups[groupIndex]?.name ?? '', name: '' }
+	}
+
+	updateFile(id, changes) {
+		if (id) this.files.set(id, { ...this.files.get(id), ...changes })
+	}
+
+	// Files on the canvases with this name (case and spaces around it don't matter)
+	findFiles(name) {
+		const wanted = String(name).trim().toLowerCase()
+		const found = [...this.files.entries()].filter(([, file]) => file.name?.toLowerCase() === wanted)
+		if (!found.length) this.log('warn', `No file named "${name}" in the plans on air or in preview`)
+		return found
+	}
+
+	// The video that plays (the longest one left, if several) and its times. Kommander sends no progress while it
+	// plays, so its position is asked for every second
+	updateVideo() {
+		const left = ([, file]) => file.duration - (file.position || 0)
+		const videos = [...this.files.entries()].filter(([, file]) => file.type === VIDEO && file.duration > 0)
+		const playing = videos.filter(([, file]) => file.state === 1)
+		const [id, video] = (playing.length ? playing : videos).sort((a, b) => left(b) - left(a))[0] ?? []
+		this.setVariableValues({
+			video_name: video?.name ?? '',
+			video_elapsed: video ? formatTime(video.position || 0) : '',
+			video_remaining: video ? formatTime(left([id, video]), true) : '',
+			video_remaining_seconds: video ? Math.ceil(left([id, video]) / 1000) : '',
+			video_duration: video ? formatTime(video.duration, true) : '',
+		})
+		this.playingVideo = playing.length ? id : null
+		if (this.playingVideo && !this.videoTimer) {
+			this.videoTimer = setInterval(() => {
+				if (this.send('GetProgFilePlayState', { id: this.playingVideo })) this.videoAsked = this.playingVideo
+			}, 1000)
+		} else if (!this.playingVideo) {
+			clearInterval(this.videoTimer)
+			this.videoTimer = null
+		}
+	}
+
+	// Kommander has no notice for recording, so this follows the replies to our own commands
+	setRecording(recording) {
+		this.recording = recording
+		clearInterval(this.recordTimer)
+		this.recordTimer = null
+		if (recording) {
+			const start = Date.now()
+			this.recordTimer = setInterval(
+				() => this.setVariableValues({ record_time: formatTime(Date.now() - start) }),
+				1000,
+			)
+		}
+		this.checkFeedbacks('recording')
+		this.setVariableValues({ recording, record_time: recording ? formatTime(0) : '' })
 	}
 }
 

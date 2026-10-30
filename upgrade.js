@@ -1,30 +1,15 @@
+// Each script runs once per connection, when it moves to the version of the module that added it
 export const upgradeScripts = [
-	// function v2_1(context, props) {
-	// 	const result = {
-	// 		updatedConfig: null,
-	// 		updatedActions: [],
-	// 		updatedFeedbacks: [],
-	// 	}
-	// 	if (props.config) {
-	// 		let config = props.config
-	// 		if (config.url === undefined) {
-	// 			let host = 'localhost'
-	// 			let port = null
-	// 			if (config.host) {
-	// 				host = config.host
-	// 				delete config.host
-	// 			}
-	// 			if (config.port) {
-	// 				port = config.port
-	// 				delete config.port
-	// 			}
-	// 			config.url = 'ws://' + host + (port ? ':' + port : '')
-	// 		}
-	// 		if (config.append_new_line === undefined) {
-	// 			config.append_new_line = true
-	// 		}
-	// 		result.updatedConfig = config
-	// 	}
-	// 	return result
-	// },
+	// 1.1.0: login and message logging became settings. Fill them in with what version 1.0 used
+	function (_context, props) {
+		const config = props.config
+		if (!config || config.username !== undefined) {
+			return { updatedConfig: null, updatedActions: [], updatedFeedbacks: [] }
+		}
+		return {
+			updatedConfig: { ...config, username: 'streamDeck', password: 'streamDeck', debug_messages: false },
+			updatedActions: [],
+			updatedFeedbacks: [],
+		}
+	},
 ]
