@@ -1,5 +1,5 @@
 {
-	"id": "kommander-t3", 
+	"id": "kommander-t3",
 	"name": "Kommander Media Server",
 	"shortname": "Kommander",
 	"description": "This module will allow you to control Kommander Media Server",
@@ -14,7 +14,7 @@
 		}
 	],
 	"runtime": {
-		"type": "node18",
+		"type": "node22",
 		"api": "nodejs-ipc",
 		"apiVersion": "0.0.0",
 		"entrypoint": "../main.js"

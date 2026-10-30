@@ -36,13 +36,14 @@ function feedback(feedbackId, options, bgcolor) {
 export function getPresetDefinitions(label, planGroups) {
 	const presets = {}
 
+	// Plan buttons are green while in preview and red while on air, like a switcher's tally
 	for (let n = 1; n <= 32; n++) {
 		presets[`plan_${n}`] = button(
 			'Plans',
 			`Plan ${n}`,
 			`PLAN ${n}`,
 			[action('callPlan', { callPlan: n })],
-			[feedback('plan', { plan: n - 1 }, RED)],
+			[feedback('previewPlan', { plan: n - 1 }, GREEN), feedback('plan', { plan: n - 1 }, RED)],
 		)
 		presets[`group_${n}`] = button(
 			'Groups',
@@ -144,9 +145,36 @@ export function getPresetDefinitions(label, planGroups) {
 	presets.page_up = button('Presentation', 'Page up', 'PAGE\nUP', [action('PageTurn', { pageTurn: 'PrevPage' })])
 	presets.page_down = button('Presentation', 'Page down', 'PAGE\nDOWN', [action('PageTurn', { pageTurn: 'NextPage' })])
 
+	presets.preview_mode = button(
+		'Preview (PVW)',
+		'Preview mode on/off',
+		'PVW\nMODE',
+		[action('previewMode', { mode: 'toggle' })],
+		[feedback('previewMode', {}, GREEN)],
+	)
+	presets.take = button('Preview (PVW)', 'Take: preview to air', 'TAKE', [action('take')], [], RED)
+	presets.copy_to_preview = button('Preview (PVW)', 'Copy air to preview', 'PGM\n> PVW', [action('copyToPreview')])
+	presets.status_preview = button('Preview (PVW)', 'Plan in preview', `PVW\n$(${label}:preview_plan_name)`, [])
+
+	presets.record = button(
+		'Recording',
+		'Record on/off',
+		`REC\n$(${label}:record_time)`,
+		[action('record', { mode: 'toggle' })],
+		[feedback('recording', {}, RED)],
+	)
+
 	presets.status_plan = button('Status', 'Plan on air', `ON AIR\n$(${label}:plan_name)`, [])
 	presets.status_group = button('Status', 'Current group', `GROUP\n$(${label}:group_name)`, [])
 	presets.status_play = button('Status', 'Play status', `$(${label}:play_status)`, [])
+	presets.status_video = button('Status', 'Video time left', `VIDEO\n$(${label}:video_remaining)`, [])
+	presets.status_volume = button('Status', 'Volume', `VOL\n$(${label}:volume)`, [])
+
+	for (let n = 1; n <= 32; n++) {
+		presets[`timeline_${n}`] = button('Timeline', `Timeline ${n} play/pause`, `TL ${n}`, [
+			action('CallTimeline', { CallTimeline: n, CallTimelineStatus: 1 }),
+		])
+	}
 
 	// One button per group and plan of the open project, once the media library has been loaded
 	planGroups.forEach((group, g) => {
@@ -163,7 +191,10 @@ export function getPresetDefinitions(label, planGroups) {
 				plan.name,
 				plan.name,
 				[action('CallByName', { CallByName: `${group.name}@@${plan.name}` })],
-				[feedback('callByName', { groupName: group.name, planName: plan.name }, RED)],
+				[
+					feedback('previewByName', { groupName: group.name, planName: plan.name }, GREEN),
+					feedback('callByName', { groupName: group.name, planName: plan.name }, RED),
+				],
 			)
 		})
 	})
